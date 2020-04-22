@@ -1,0 +1,28 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Transform": "AWS::Serverless-2016-10-31",
+  "Description": "Count macro A simple iterator for creating multiple identical resources",
+  "Resources": {
+    "Macro": {
+      "Type": "AWS::CloudFormation::Macro",
+      "Properties": {
+        "Name": "Count",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "CountMacroFunction",
+            "Arn"
+          ]
+        }
+      }
+    },
+    "CountMacroFunction": {
+      "Type": "AWS::Serverless::Function",
+      "Properties": {
+        "InlineCode": "import copy\nimport json\ndef process_template(template,parameters):\n    new_template = copy.deepcopy(template)\n    status = 'success'\n    for name, resource in template['Resources'].items():\n        if 'Count' in resource:\n            try:\n                refValue = new_template['Resources'][name]['Count'].pop('Ref')\n                count = int(parameters[refValue])\n                new_template['Resources'][name].pop('Count')\n            except AttributeError:\n                count = new_template['Resources'][name].pop('Count')\n            print(\"Found 'Count' property with value {} in '{}' resource....multiplying!\".format(count,name))\n            resourceToMultiply = new_template['Resources'].pop(name)\n            resourcesAfterMultiplication = multiply(name, resourceToMultiply, count)\n            if not set(resourcesAfterMultiplication.keys()) & set(new_template['Resources'].keys()):\n                new_template['Resources'].update(resourcesAfterMultiplication)\n            else:\n                status = 'failed'\n                return status, template\n        else:\n            print(\"Did not find 'Count' property in '{}' resource....Nothing to do!\".format(name))\n    return status, new_template\ndef update_placeholder(resource_structure, iteration):\n    resourceString = json.dumps(resource_structure)\n    placeHolderCount = resourceString.count('%d')\n    if placeHolderCount > 0:\n        print(\"Found {} occurrences of decimal placeholder in JSON, replacing with iterator value {}\".format(placeHolderCount, iteration))\n        placeHolderReplacementValues = [iteration] * placeHolderCount\n        resourceString = resourceString % (*placeHolderReplacementValues,)\n        return json.loads(resourceString)\n    else:\n        print(\"No occurences of decimal placeholder found in JSON, therefore nothing will be replaced\")\n        return resource_structure\ndef multiply(resource_name, resource_structure, count):\n    resources = {}\n    for iteration in range(1, (count + 1)):\n        print(\"Multiplying '{}', iteration count {}\".format(resource_name,iteration))\n        multipliedResourceStructure = update_placeholder(resource_structure,iteration)\n        resources[resource_name+str(iteration)] = multipliedResourceStructure\n    return resources\ndef handler(event, context):\n    result = process_template(event['fragment'],event['templateParameterValues'])\n    return {\n        'requestId': event['requestId'],\n        'status': result[0],\n        'fragment': result[1],\n    }\n",
+        "Handler": "index.handler",
+        "Runtime": "python3.6",
+        "Timeout": 5
+      }
+    }
+  }
+}

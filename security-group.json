@@ -1,0 +1,35 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Security Group",
+  "Parameters": {
+    "allowedCIDR": {
+      "Type": "String",
+      "Description": "Allowed CIDR Range to be used in the security group",
+      "AllowedPattern": "^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})"
+    },
+    "vpcId": {
+      "Type": "String",
+      "Description": "vpc ID"
+    }
+  },
+  "Resources": {
+    "securityGroup1": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "VPC Security Group",
+        "GroupName": { "Fn::Join": ["-", [{ "Ref": "AWS::StackName" }, "sg"]]},
+        "VpcId": { "Ref" : "vpcId" },
+        "SecurityGroupIngress": [
+          { "IpProtocol": "tcp", "FromPort": "22", "ToPort": "22", "CidrIp": { "Ref": "allowedCIDR" }}
+        ],
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Join": ["-", [{ "Ref": "AWS::StackName" }, "sg"]]}}]
+      }
+    }
+  },
+  "Outputs": {
+    "securityGroupId": {
+      "Value": { "Ref": "securityGroup1" },
+      "Description": "Security Group"
+    }
+  }
+}

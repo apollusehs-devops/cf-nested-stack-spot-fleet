@@ -1,0 +1,262 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "EC2 Spot Fleet",
+  "Mappings": {
+    "amiRegion": {
+      "us-east-1": { "AMI": "ami-0dbb717f493016a1a" },
+      "us-east-2": { "AMI": "ami-0d6808451e868a339" },
+      "us-west-1": { "AMI": "ami-09f2f73141c83d4fe" },
+      "us-west-2": { "AMI": "ami-008d8ed4bd7dc2485" }
+    }
+  },
+  "Parameters": {
+    "spotFleetS3BucketName": {
+      "Type": "String",
+      "Description": "AWS S3 Bucket that will be accessed by the Spot Fleet"
+    },
+    "spotFleetUserData": {
+      "Type": "String",
+      "Description": "executes on the Spot Fleet"
+    },
+    "spotFleetKeyPairName": {
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "Description": "Name of an existing EC2 KeyPair to enable SSH access to the EC2 Instances"
+    },
+    "spotFleetInstanceType": {
+      "Type": "String",
+      "AllowedValues": ["p3.2xlarge", "p2.8xlarge"],
+      "Description": "EC2 Instance type to use"
+    },
+    "spotFleetSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup::Id",
+      "Description": "Security Group ID"
+    },
+    "spotFleetMaximumCapacity": {
+      "Type": "Number",
+      "Description": "The maximum number of units to request for the Spot Fleet"
+    },
+    "spotFleetTargetCapacity": {
+      "Type": "Number",
+      "Description": "The number of units to request for the Spot Fleet"
+    },
+    "spotFleetPrice": {
+      "Type": "Number",
+      "Description": "The maximum price per unit hour that you are willing to pay for a Spot Instance. The default is the On-Demand price"
+    },
+    "spotFleetAllocationStrategy": {
+      "Type": "String",
+      "Description": "Indicates how to allocate the target Spot Instance capacity across the Spot Instance pools specified by the Spot Fleet request"
+    },
+    "spotFleetSubnets": {
+      "Type": "String",
+      "Description": "Subnetwork/s ID"
+    },
+    "spotFleetRequestType": {
+      "Type": "String",
+      "Description": "One of [instant | maintain | request]"
+    }
+  },
+  "Outputs": {
+    "spotFleetRoleARN": { "Value": { "Fn::GetAtt": ["spotFleetRole", "Arn"]}},
+    "spotFleetRequestId": { "Value": { "Ref": "spotFleet" }}
+  },
+  "Resources": {
+    "spotFleetRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "ManagedPolicyArns": [ "arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole" ],
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": { "Service": ["spotfleet.amazonaws.com"] },
+              "Action": ["sts:AssumeRole"]
+            }
+          ]
+        }
+      }
+    },
+    "spotFleetAutoscaleRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "ManagedPolicyArns": ["arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetAutoscaleRole"],
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            { "Action": ["sts:AssumeRole"],
+              "Effect": "Allow",
+              "Principal": { "Service": ["application-autoscaling.amazonaws.com"] }
+            }
+          ]
+        }
+      }
+    },
+    "spotFleetInstanceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Action": [ "sts:AssumeRole" ],
+              "Effect": "Allow",
+              "Principal": { "Service": ["ec2.amazonaws.com"] }
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": { "Fn::Join": ["-", [ { "Ref": "AWS::StackName" }, "cloudWatchLogsPolicy" ] ] },
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Action": [
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents",
+                    "logs:DescribeLogStreams"
+                  ],
+                  "Effect": "Allow",
+                  "Resource": "arn:aws:logs:*:*:*"
+                }
+              ]
+            }
+          },
+          {
+            "PolicyName": { "Fn::Join": ["-", [{ "Ref": "AWS::StackName" }, "s3BucketListPolicy"] ]},
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Action": "s3:ListBucket",
+                  "Effect": "Allow",
+                  "Resource": [{ "Fn::Join": ["", ["arn:aws:s3:::", { "Ref": "spotFleetS3BucketName" }, "/*"] ]}]
+                }
+              ]
+            }
+          },
+          {
+            "PolicyName": { "Fn::Join": ["-", [{ "Ref": "AWS::StackName" }, "s3BucketReadWritePolicy"] ]},
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Action": [
+                    "s3:PutObject*",
+                    "s3:GetObject",
+                    "s3:DeleteObject"
+                  ],
+                  "Effect": "Allow",
+                  "Resource": [ { "Fn::Join": ["", ["arn:aws:s3:::", { "Ref": "spotFleetS3BucketName" }, "/*"] ]}]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "spotFleetInstanceProfile": {
+      "DependsOn": ["spotFleetInstanceRole"],
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Path": "/",
+        "Roles": [ { "Ref": "spotFleetInstanceRole" }]
+      }
+    },
+    "spotFleetScalingPolicyDown": {
+      "Type" : "AWS::ApplicationAutoScaling::ScalingPolicy",
+      "Properties" : {
+        "PolicyName": "spotFleetScalingPolicyScaleDown",
+        "PolicyType": "StepScaling",
+        "ScalingTargetId": { "Ref": "spotFleetScalableTarget" },
+        "StepScalingPolicyConfiguration": {
+          "AdjustmentType": "ChangeInCapacity",
+          "Cooldown": 300,
+          "MetricAggregationType": "Average",
+          "StepAdjustments": [
+            {
+              "MetricIntervalUpperBound": 0,
+              "ScalingAdjustment": -1
+            }
+          ]
+        }
+      }
+    },
+    "spotFleetScalingPolicyUp": {
+      "Type" : "AWS::ApplicationAutoScaling::ScalingPolicy",
+      "Properties" : {
+        "PolicyName": "spotFleetScalingPolicyUp",
+        "PolicyType": "StepScaling",
+        "ScalingTargetId": { "Ref": "spotFleetScalableTarget" },
+        "StepScalingPolicyConfiguration": {
+          "AdjustmentType": "ChangeInCapacity",
+          "Cooldown": 300,
+          "MetricAggregationType": "Average",
+          "StepAdjustments": [
+            {
+              "MetricIntervalUpperBound": 0,
+              "ScalingAdjustment": 1
+            }
+          ]
+        }
+      }
+    },
+    "spotFleetScalableTarget": {
+      "DependsOn": ["spotFleet", "spotFleetAutoscaleRole"],
+      "Type" : "AWS::ApplicationAutoScaling::ScalableTarget",
+      "Properties" : {
+        "MaxCapacity": { "Ref": "spotFleetMaximumCapacity" },
+        "MinCapacity": { "Ref": "spotFleetTargetCapacity" },
+        "ResourceId": { "Fn::Join": ["/", ["spot-fleet-request", { "Ref": "spotFleet" }] ]},
+        "RoleARN": { "Fn::GetAtt": ["spotFleetAutoscaleRole", "Arn"] },
+        "ScalableDimension": "ec2:spot-fleet-request:TargetCapacity",
+        "ServiceNamespace": "ec2"
+      }
+    },
+    "spotFleet": {
+      "Type": "AWS::EC2::SpotFleet",
+      "Properties": {
+        "SpotFleetRequestConfigData": {
+          "IamFleetRole": { "Fn::GetAtt": ["spotFleetRole", "Arn"] },
+          "AllocationStrategy": { "Ref": "spotFleetAllocationStrategy" },
+          "SpotPrice": { "Ref": "spotFleetPrice" },
+          "TargetCapacity": { "Ref": "spotFleetTargetCapacity" },
+          "TerminateInstancesWithExpiration": true,
+          "ReplaceUnhealthyInstances": true,
+          "Type": { "Ref": "spotFleetRequestType" },
+          "LaunchSpecifications": [
+            {
+              "Monitoring": { "Enabled": true },
+              "ImageId": {
+                "Fn::FindInMap": [
+                  "amiRegion",
+                  { "Ref": "AWS::Region" },
+                  "AMI"
+                ]
+              },
+              "IamInstanceProfile": {
+                "Arn": { "Fn::GetAtt": ["spotFleetInstanceProfile", "Arn"] }
+              },
+              "InstanceType": { "Ref": "spotFleetInstanceType" },
+              "KeyName": { "Ref": "spotFleetKeyPairName" },
+              "SecurityGroups": [{ "GroupId": { "Ref": "spotFleetSecurityGroup" } }],
+              "SubnetId": { "Ref": "spotFleetSubnets" },
+              "EbsOptimized": false,
+              "UserData" : { "Fn::Base64" : { "Fn::Join" : ["", [ { "Ref": "spotFleetUserData" } ] ] } },
+              "TagSpecifications": [
+                {
+                  "ResourceType": "instance",
+                  "Tags": [
+                    { "Key": "Name", "Value": { "Fn::Join": ["", [ { "Ref": "AWS::StackName" }, "-instance"] ] } }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

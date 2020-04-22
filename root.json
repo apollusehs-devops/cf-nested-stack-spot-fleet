@@ -1,0 +1,181 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "AWS CloudFormation Root stack",
+  "Metadata": {
+    "AWS::CloudFormation::Interface": {
+      "ParameterGroups": [
+        {
+          "Label": {
+            "default": "Template Parameters"
+          },
+          "Parameters": [
+            "templateBucketURL"
+          ]
+        },
+        {
+          "Label": {
+            "default": "VPC Parameters"
+          },
+          "Parameters": [
+            "vpcCIDR"
+          ]
+        },
+        {
+          "Label": {
+            "default": "Security Group Parameters"
+          },
+          "Parameters": [
+            "allowedCIDR"
+          ]
+        },
+        {
+          "Label": {
+            "default": "Spot Fleet Parameters"
+          },
+          "Parameters": [
+            "spotFleetS3BucketName",
+            "spotFleetInstanceType",
+            "spotFleetPrice",
+            "spotFleetMaximumCapacity",
+            "spotFleetTargetCapacity",
+            "spotFleetAllocationStrategy",
+            "spotFleetRequestType",
+            "spotFleetKeyPairName",
+            "spotFleetUserData"
+          ]
+        }
+      ]
+    }
+  },
+  "Parameters": {
+    "templateBucketURL": {
+      "Type": "String",
+      "Default": "https://<S3BucketName>.s3-us-west-2.amazonaws.com/",
+      "AllowedPattern": ".+",
+      "Description": "URL to an S3 Bucket, joined with template filename. [https://my-bucket.s3-us-west-2.amazonaws.com/]"
+    },
+    "vpcCIDR": {
+      "Type": "String",
+      "Default": "172.21.0.0/16",
+      "AllowedPattern": "^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})",
+      "Description": "CIDR Range for the VPC"
+    },
+    "allowedCIDR": {
+      "Type": "String",
+      "Default": "0.0.0.0/0",
+      "AllowedPattern": "^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})",
+      "Description": "Allowed CIDR Range to be used in the security group"
+    },
+    "spotFleetS3BucketName": {
+      "Type": "String",
+      "Default": "my-bucket-name",
+      "AllowedPattern": ".+",
+      "Description": "Allow Spot Fleet instances access to the specified S3 bucket"
+    },
+    "spotFleetInstanceType": {
+      "Type": "String",
+      "Default": "p3.2xlarge",
+      "AllowedValues": ["p3.2xlarge", "p2.8xlarge"],
+      "Description": "Spot Fleet Instance type.\n Accelerated Computing instance types [https://aws.amazon.com/ec2/instance-types/]"
+    },
+    "spotFleetPrice": {
+      "Type": "Number",
+      "Default": 0.918,
+      "Description": "The maximum price per unit hour that you are willing to pay for a Spot Instance. The default is the On-Demand price"
+    },
+    "spotFleetMaximumCapacity": {
+      "Type": "Number",
+      "Default": 2,
+      "Description": "The maximum number of units to request for the Spot Fleet"
+    },
+    "spotFleetTargetCapacity": {
+      "Type": "Number",
+      "Default": 1,
+      "Description": "The number of units to request for the Spot Fleet"
+    },
+    "spotFleetAllocationStrategy": {
+      "Type": "String",
+      "Default": "lowestPrice",
+      "AllowedValues": ["capacityOptimized","diversified" ,"lowestPrice"],
+      "Description": "Indicates how to allocate the target Spot Instance capacity across the Spot Instance pools specified by the Spot Fleet request"
+    },
+    "spotFleetRequestType": {
+      "Type": "String",
+      "Default": "maintain",
+      "AllowedValues": ["instant","maintain" ,"request"],
+      "Description": "One of [instant | maintain | request]"
+    },
+    "spotFleetKeyPairName": {
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "Description": "EC2 KeyPair name for the Spot Fleet"
+    },
+    "spotFleetUserData": {
+      "Type": "String",
+      "Default": "#!/bin/bash -c 'echo Hello!'",
+      "Description": "Commands to execute after the instance starts"
+    }
+  },
+  "Resources": {
+    "s3Stack": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Properties": {
+        "TemplateURL": { "Fn::Join": ["", [{ "Ref": "templateBucketURL"}, "s3.json"]]},
+        "TimeoutInMinutes" : 5,
+        "Parameters": {
+          "s3BucketNamePrefix": { "Ref": "s3BucketNamePrefix" },
+          "s3BucketCount": { "Ref": "s3BucketCount" }
+        },
+        "Tags": [{ "Key": "Name", "Value": "s3Stack" }]
+      }
+    },
+    "vpcStack": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Properties": {
+        "TemplateURL": { "Fn::Join": ["", [{ "Ref": "templateBucketURL"}, "vpc.json"]]},
+        "TimeoutInMinutes" : 5,
+        "Parameters": {
+          "vpcCIDR": { "Ref": "vpcCIDR" }
+        },
+        "Tags": [{ "Key": "Name", "Value": "vpcStack" }]
+      }
+    },
+    "securityGroupStack": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Properties": {
+        "TemplateURL": { "Fn::Join": ["", [{ "Ref": "templateBucketURL"}, "security-group.json"]]},
+        "TimeoutInMinutes" : 5,
+        "Parameters": {
+          "allowedCIDR": { "Ref": "allowedCIDR" },
+          "vpcId" : { "Fn::GetAtt": ["vpcStack", "Outputs.vpcId"] }
+        },
+        "Tags": [{ "Key": "Name", "Value": "securityGroupStack" }]
+      }
+    },
+    "ec2SpotFleetStack": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Properties": {
+        "TemplateURL": { "Fn::Join": ["", [{ "Ref": "templateBucketURL"}, "ec2-spot-fleet.json"]]},
+        "TimeoutInMinutes" : 10,
+        "Parameters": {
+          "spotFleetKeyPairName": { "Ref": "spotFleetKeyPairName" },
+          "spotFleetUserData": { "Ref": "spotFleetUserData" },
+          "spotFleetTargetCapacity": { "Ref": "spotFleetTargetCapacity" },
+          "spotFleetMaximumCapacity": { "Ref": "spotFleetMaximumCapacity" },
+          "spotFleetPrice": { "Ref": "spotFleetPrice" },
+          "spotFleetAllocationStrategy": { "Ref": "spotFleetAllocationStrategy" },
+          "spotFleetRequestType": { "Ref": "spotFleetRequestType" },
+          "spotFleetInstanceType": { "Ref": "spotFleetInstanceType" },
+          "spotFleetS3BucketName": { "Ref": "spotFleetS3BucketName" },
+          "spotFleetSubnets": {
+            "Fn::Join": [
+              ",",
+              [{"Fn::GetAtt": ["vpcStack", "Outputs.privateSubnet1"]}, {"Fn::GetAtt": ["vpcStack", "Outputs.privateSubnet2"]}]
+            ]
+          },
+          "spotFleetSecurityGroup": { "Fn::GetAtt": ["securityGroupStack", "Outputs.securityGroupId"] }
+        },
+        "Tags": [{ "Key": "Name", "Value": "ec2SpotFleetStack" }]
+      }
+    }
+  }
+}
